@@ -4,15 +4,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * ROLE 4 (Replication and consistency) starting point.
- *
- * A very small in-memory key-value store with versions, compare-and-set (CAS) and
- * duplicate-request protection. Right now every request is applied directly on this one node.
- * Later, the store should change ONLY when ConsensusModule reports that a log entry is
- * committed (see docs/DESIGN.md, section 5). When that happens, "nextVersion" is replaced by
- * the real log index of the entry.
- */
 public class KeyValueStore {
 
     public record Entry(String value, long version) { }
