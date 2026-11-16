@@ -75,3 +75,5 @@ public final class ConsensusModule implements AutoCloseable {
     public long lastLogIndex() { synchronized(lock){ return log.size(); } }
     public boolean isLeader() { synchronized(lock){ return role==Role.LEADER; } }
 
+
+}
