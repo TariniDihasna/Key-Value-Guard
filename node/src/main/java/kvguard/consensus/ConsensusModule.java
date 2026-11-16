@@ -50,3 +50,28 @@ public final class ConsensusModule implements AutoCloseable {
     private long electionDeadlineNanos;
     private int votesReceived = 0;
     private final int majority;
+    
+
+    public ConsensusModule(String nodeId, List<Peer> peers, String dataDir, Consumer<LogEntry> applier, FaultManager faults) throws IOException {
+        this.nodeId=Objects.requireNonNull(nodeId);
+        this.peers=List.copyOf(peers);
+        this.applyCommitted=Objects.requireNonNull(applier);
+        this.faults=Objects.requireNonNull(faults);
+        this.majority=(peers.size()/2)+1;
+        if (peers.stream().noneMatch(p -> p.id().equals(nodeId))) throw new IllegalArgumentException("Peers list must include this node: "+nodeId);
+        Path dir=Paths.get(dataDir); Files.createDirectories(dir); this.stateFile=dir.resolve("raft-state.bin");
+        loadState(); resetElectionDeadline();
+        for (Peer p: peers) if (!p.id().equals(nodeId)) channels.put(p.id(), ManagedChannelBuilder.forTarget(p.target()).usePlaintext().build());
+        scheduler.scheduleWithFixedDelay(this::tick, 50, 50, TimeUnit.MILLISECONDS);
+        NodeLog.info(nodeId,"CONSENSUS started peers="+peers.size()+" majority="+majority+" term="+currentTerm+" log="+log.size());
+    }
+
+    public ConsensusServiceImpl service() { return new ConsensusServiceImpl(this); }
+    public String roleName() { synchronized(lock){ return role.name(); } }
+    public long term() { synchronized(lock){ return currentTerm; } }
+    public String leaderId() { synchronized(lock){ return leaderId; } }
+    public long commitIndex() { synchronized(lock){ return commitIndex; } }
+    public long lastApplied() { synchronized(lock){ return lastApplied; } }
+    public long lastLogIndex() { synchronized(lock){ return log.size(); } }
+    public boolean isLeader() { synchronized(lock){ return role==Role.LEADER; } }
+
