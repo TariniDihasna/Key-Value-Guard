@@ -2,6 +2,7 @@ package kvguard.client;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import kvguard.proto.ClientServiceGrpc;
 import kvguard.proto.FailureDetectionServiceGrpc;
@@ -19,21 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-
-/**
- * Command-line client. Every call prints one line with a timestamp, so the output can be saved
- * and analysed later (successful requests, errors, values read).
- *
- * Usage (options first, then the command):
- *   java -jar client.jar [--target localhost:9001] [--client c1] put KEY VALUE
- *   java -jar client.jar get KEY [stale]
- *   java -jar client.jar cas KEY EXPECTED_VERSION VALUE      (0 = key must not exist)
- *   java -jar client.jar delete KEY
- *   java -jar client.jar ping
- *
- * ROLE 4 next steps: retry on NOT_LEADER using leader_hint, reuse the SAME request id when
- * retrying, and add a mode that runs many requests from several concurrent clients.
- */
 public class Main {
 
     private static final long TIMEOUT_SECONDS = 3;
@@ -80,23 +66,18 @@ public class Main {
         switch (name) {
             case "put" -> {
                 requireArgs(command, 3, "put KEY VALUE");
-                SubmitResponse r = api.submit(newRequest(clientId, Operation.OP_PUT)
-                        .setKey(command.get(1)).setValue(command.get(2)).build());
-                log(clientId, target, "PUT " + command.get(1), describe(r));
+                SubmitResponse r = submitWithRetry(channel,newRequest(clientId,Operation.OP_PUT).setKey(command.get(1)).setValue(command.get(2)).build());
+                log(clientId,target,"PUT " + command.get(1), describe(r));
             }
             case "delete" -> {
                 requireArgs(command, 2, "delete KEY");
-                SubmitResponse r = api.submit(newRequest(clientId, Operation.OP_DELETE)
-                        .setKey(command.get(1)).build());
-                log(clientId, target, "DELETE " + command.get(1), describe(r));
+                SubmitResponse r = submitWithRetry(channel,newRequest(clientId,Operation.OP_DELETE).setKey(command.get(1)).build());
+                log(clientId,target,"DELETE " + command.get(1), describe(r));
             }
             case "cas" -> {
                 requireArgs(command, 4, "cas KEY EXPECTED_VERSION VALUE");
-                SubmitResponse r = api.submit(newRequest(clientId, Operation.OP_CAS)
-                        .setKey(command.get(1))
-                        .setExpectedVersion(Long.parseLong(command.get(2)))
-                        .setValue(command.get(3)).build());
-                log(clientId, target, "CAS " + command.get(1) + " expected=" + command.get(2), describe(r));
+                SubmitResponse r = submitWithRetry(channel,newRequest(clientId,Operation.OP_CAS).setKey(command.get(1)).setExpectedVersion(Long.parseLong(command.get(2))).setValue(command.get(3)).build());
+                log(clientId,target,"CAS " + command.get(1) + " expected"  + command.get(2), describe(r));
             }
             case "get" -> {
                 requireArgs(command, 2, "get KEY [stale]");
@@ -122,6 +103,32 @@ public class Main {
         }
     }
 
+    private static final int MAX_ATTEMPTS = 3;
+
+    private static SubmitResponse submitWithRetry(ManagedChannel channel,SubmitRequest request){
+        StatusRuntimeException lastError = null;
+        for(int attempt=1; attempt <= MAX_ATTEMPTS; attempt++){
+            try {
+                ClientServiceGrpc.ClientServiceBlockingStub api = ClientServiceGrpc.newBlockingStub(channel).withDeadlineAfter(TIMEOUT_SECONDS,TimeUnit.SECONDS);
+                return api.submit(request);
+            }catch (StatusRuntimeException e){
+                io.grpc.Status.Code code = e.getStatus().getCode();
+                boolean retryable = code == Status.Code.DEADLINE_EXCEEDED || code == Status.Code.UNAVAILABLE;
+                if(!retryable){
+                    throw e;
+                }
+                lastError = e;
+                System.out.println(Instant.now() + " attempt " + attempt + " of " + MAX_ATTEMPTS + " failed (" + code + "), request id=" + request.getRequestId());
+                try {
+                    Thread.sleep(500L * attempt);
+                }catch (InterruptedException ie){
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+        throw lastError;
+    }
     private static SubmitRequest.Builder newRequest(String clientId, Operation op) {
         // A fresh request id per command. When retrying the SAME command, reuse the same id.
         return SubmitRequest.newBuilder()
