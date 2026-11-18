@@ -75,5 +75,76 @@ public final class ConsensusModule implements AutoCloseable {
     public long lastLogIndex() { synchronized(lock){ return log.size(); } }
     public boolean isLeader() { synchronized(lock){ return role==Role.LEADER; } }
 
+    private void tick() {
+        if (closed.get()) return;
+        boolean elect=false, heartbeat=false;
+        synchronized(lock) {
+            long now=System.nanoTime();
+            if (role==Role.LEADER) heartbeat=true;
+            else if (now>=electionDeadlineNanos) elect=true;
+        }
+        if (elect) startElection();
+        if (heartbeat) replicateAll(false);
+    }
+
+    private void resetElectionDeadline() {
+        long millis=900 + ThreadLocalRandom.current().nextLong(650);
+        electionDeadlineNanos=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(millis);
+    }
+
+    private void startElection() {
+        final long electionTerm;
+        final long lastIdx,lastTerm;
+        synchronized(lock) {
+            if (closed.get() || role==Role.LEADER) return;
+            role=Role.CANDIDATE; currentTerm++; votedFor=nodeId; leaderId=""; votesReceived=1;
+            electionTerm=currentTerm; lastIdx=log.size(); lastTerm=termAt(lastIdx); resetElectionDeadline(); persistQuietly();
+            NodeLog.info(nodeId,"CONSENSUS election started term="+currentTerm+" lastLog="+lastIdx+"/"+lastTerm);
+            if (votesReceived>=majority) becomeLeaderLocked();
+        }
+        List<Future<Boolean>> futures=new ArrayList<>();
+        for (Peer p: peers) if (!p.id().equals(nodeId)) futures.add(rpcPool.submit(() -> requestVote(p,electionTerm,lastIdx,lastTerm)));
+        scheduler.execute(() -> {
+            for (Future<Boolean> f:futures) {
+                try {
+                    if (f.get(700,TimeUnit.MILLISECONDS)) {
+                        synchronized(lock) {
+                            if (role!=Role.CANDIDATE || currentTerm!=electionTerm) return;
+                            votesReceived++;
+                            if (votesReceived>=majority) { becomeLeaderLocked(); break; }
+                        }
+                    }
+                } catch(Exception ignored) { }
+            }
+        });
+    }
+
+    private boolean requestVote(Peer p,long term,long lastIdx,long lastTerm) {
+        try {
+            RequestVoteResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(450,TimeUnit.MILLISECONDS)
+                    .requestVote(RequestVoteRequest.newBuilder().setTerm(term).setCandidateId(nodeId).setLastLogIndex(lastIdx).setLastLogTerm(lastTerm).build());
+            synchronized(lock) {
+                if (r.getTerm()>currentTerm) stepDownLocked(r.getTerm(),"");
+                return r.getVoteGranted() && currentTerm==term;
+            }
+        } catch(Exception e) { return false; }
+    }
+
+    public RequestVoteResponse onRequestVote(RequestVoteRequest req) {
+        synchronized(lock) {
+            if (req.getTerm()>currentTerm) stepDownLocked(req.getTerm(),"");
+            boolean grant=false;
+            if (req.getTerm()==currentTerm) {
+                long myLast=log.size(), myTerm=termAt(myLast);
+                boolean upToDate=req.getLastLogTerm()>myTerm || (req.getLastLogTerm()==myTerm && req.getLastLogIndex()>=myLast);
+                if (upToDate && (votedFor.isEmpty() || votedFor.equals(req.getCandidateId()))) {
+                    votedFor=req.getCandidateId(); role=Role.FOLLOWER; leaderId=""; resetElectionDeadline(); persistQuietly(); grant=true;
+                }
+            }
+            return RequestVoteResponse.newBuilder().setTerm(currentTerm).setVoteGranted(grant).build();
+        }
+    }
+
+
 
 }
