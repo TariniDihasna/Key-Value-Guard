@@ -145,6 +145,57 @@ public final class ConsensusModule implements AutoCloseable {
         }
     }
 
+public AppendEntriesResponse onAppendEntries(AppendEntriesRequest req) {
+        synchronized(lock) {
+            if (req.getTerm()<currentTerm) return appendReply(false,log.size());
+            if (req.getTerm()>currentTerm || role!=Role.FOLLOWER) stepDownLocked(req.getTerm(),req.getLeaderId());
+            leaderId=req.getLeaderId(); lastContactNanos=System.nanoTime(); resetElectionDeadline();
+            long prev=req.getPrevLogIndex();
+            if (prev>log.size() || (prev>0 && termAt(prev)!=req.getPrevLogTerm())) return appendReply(false,Math.min(log.size(),prev-1));
+            int offset=0;
+            for (LogEntry incoming:req.getEntriesList()) {
+                long index=incoming.getIndex();
+                if (index<=log.size()) {
+                    if (termAt(index)!=incoming.getTerm()) {
+                        if (index<=commitIndex) return appendReply(false,log.size());
+                        while(log.size()>=index) log.remove(log.size()-1);
+                        log.add(incoming); offset++;
+                    }
+                } else { log.add(incoming); offset++; }
+            }
+            if (offset>0) persistQuietly();
+            if (req.getLeaderCommit()>commitIndex) {
+                commitIndex=Math.min(req.getLeaderCommit(),log.size()); applyCommittedLocked(); persistQuietly();
+            }
+            return appendReply(true,prev+req.getEntriesCount());
+        }
+    }
 
+    private AppendEntriesResponse appendReply(boolean success,long match) {
+        return AppendEntriesResponse.newBuilder().setTerm(currentTerm).setSuccess(success).setMatchIndex(match).build();
+    }
 
+    private void becomeLeaderLocked() {
+        role=Role.LEADER; leaderId=nodeId;
+        long next=log.size()+1L;
+        for(Peer p:peers) if(!p.id().equals(nodeId)){nextIndex.put(p.id(),next);matchIndex.put(p.id(),0L);}
+        NodeLog.info(nodeId,"CONSENSUS became LEADER term="+currentTerm+" majority="+majority);
+        // A current-term no-op establishes a commit point for entries from previous terms.
+        LogEntry noop=LogEntry.newBuilder().setTerm(currentTerm).setIndex(log.size()+1L).setOp(Operation.OP_NOOP).setRequestId("raft-noop-"+nodeId+"-"+currentTerm).build();
+        log.add(noop); persistQuietly();
+        scheduler.execute(this::replicateLeaderNoop);
+    }
+
+    private void replicateLeaderNoop() {
+        int replicated=1;
+        for(Peer p:peers) if(!p.id().equals(nodeId) && replicatePeer(p,true)) replicated++;
+        synchronized(lock) {
+            if(role==Role.LEADER && replicated>=majority && commitIndex<log.size()) {
+                commitIndex=log.size(); applyCommittedLocked(); persistQuietly();
+                NodeLog.info(nodeId,"CONSENSUS leader no-op committed index="+commitIndex+" term="+currentTerm);
+            }
+        }
+        replicateAll(false);
+    }
+    
 }
