@@ -2,8 +2,10 @@ package kvguard;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import kvguard.store.FixedLeader;
 import kvguard.store.KeyValueStore;
 import kvguard.store.LocalReplicator;
+import kvguard.store.FixedLeader;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -15,11 +17,12 @@ public class Main {
         String nodeId = options.getOrDefault("id", "node1");
         int port = Integer.parseInt(options.getOrDefault("port", "9001"));
         String peers = options.getOrDefault("peers", "");
+        String leaderId = options.getOrDefault("leader", nodeId);
 
         KeyValueStore store = new KeyValueStore();
 
         Server server = ServerBuilder.forPort(port)
-                .addService(new ClientServiceImpl(nodeId, store, new LocalReplicator(store)))
+                .addService(new ClientServiceImpl(nodeId, store, new LocalReplicator(store), new FixedLeader(nodeId,leaderId)))
                 .addService(new FailureDetectionServiceImpl(nodeId))
                 .addService(new AdminServiceImpl(nodeId, store))
                 // TODO (Role 2): add ConsensusService (RequestVote, AppendEntries)

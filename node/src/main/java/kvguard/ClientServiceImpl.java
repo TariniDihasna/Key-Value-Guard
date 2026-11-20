@@ -6,6 +6,8 @@ import kvguard.store.KeyValueStore;
 import kvguard.store.KeyValueStore.ApplyResult;
 import kvguard.store.KeyValueStore.Entry;
 import kvguard.store.Replicator;
+import kvguard.store.LeaderInfo;
+import kvguard.proto.ReadMode;
 
 import java.util.Optional;
 
@@ -14,11 +16,13 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
     private final String nodeId;
     private final KeyValueStore store;
     private final Replicator replicator;
+    private final LeaderInfo leader;
 
-    public ClientServiceImpl(String nodeId, KeyValueStore store,Replicator replicator) {
+    public ClientServiceImpl(String nodeId, KeyValueStore store,Replicator replicator, LeaderInfo leader) {
         this.nodeId = nodeId;
         this.store = store;
         this.replicator = replicator;
+        this.leader = leader;
     }
 
     @Override
@@ -26,6 +30,12 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
         Operation op = request.getOp();
         if(op != Operation.OP_PUT && op != Operation.OP_DELETE && op != Operation.OP_CAS) {
             responseObserver.onNext(SubmitResponse.newBuilder().setStatus(Status.STATUS_UNKNOWN).setMessage("Unsupported operation: " + op).setServedBy(nodeId).build());
+            responseObserver.onCompleted();
+            return;
+        }
+
+        if(!leader.isLeader()){
+            responseObserver.onNext(SubmitResponse.newBuilder().setStatus(Status.NOT_LEADER).setLeaderHint(leader.leaderId() == null ? "" : leader.leaderId()).setServedBy(nodeId).build());
             responseObserver.onCompleted();
             return;
         }
@@ -48,6 +58,12 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
 
     @Override
     public void get(GetRequest request, StreamObserver<GetResponse> responseObserver) {
+        if(request.getMode() == ReadMode.READ_STRONG && !leader.isLeader()) {
+            responseObserver.onNext(GetResponse.newBuilder().setStatus(Status.NOT_LEADER).setLeaderHint(leader.leaderId() == null ? "" : leader.leaderId()).setServedBy(nodeId).build());
+            responseObserver.onCompleted();
+            return;
+        }
+
         Optional<Entry> entry = store.get(request.getKey());
         GetResponse.Builder reply = GetResponse.newBuilder()
                 .setAppliedIndex(store.lastApplied())

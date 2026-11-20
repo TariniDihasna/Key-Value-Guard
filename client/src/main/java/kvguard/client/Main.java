@@ -103,32 +103,60 @@ public class Main {
         }
     }
 
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_ATTEMPTS = 5;
 
-    private static SubmitResponse submitWithRetry(ManagedChannel channel,SubmitRequest request){
+    private static String addressOf(String nodeId) {
+        return "localhost:900" + nodeId.replaceAll("\\D", "");
+    }
+
+    private static SubmitResponse submitWithRetry(ManagedChannel firstChannel,SubmitRequest request) {
+        ManagedChannel channel = firstChannel;
+        List<ManagedChannel> opened = new ArrayList<>();
         StatusRuntimeException lastError = null;
-        for(int attempt=1; attempt <= MAX_ATTEMPTS; attempt++){
-            try {
-                ClientServiceGrpc.ClientServiceBlockingStub api = ClientServiceGrpc.newBlockingStub(channel).withDeadlineAfter(TIMEOUT_SECONDS,TimeUnit.SECONDS);
-                return api.submit(request);
-            }catch (StatusRuntimeException e){
-                io.grpc.Status.Code code = e.getStatus().getCode();
-                boolean retryable = code == Status.Code.DEADLINE_EXCEEDED || code == Status.Code.UNAVAILABLE;
-                if(!retryable){
-                    throw e;
-                }
-                lastError = e;
-                System.out.println(Instant.now() + " attempt " + attempt + " of " + MAX_ATTEMPTS + " failed (" + code + "), request id=" + request.getRequestId());
+        SubmitResponse lastRespone = null;
+        try {
+            for(int attempt=1; attempt <= MAX_ATTEMPTS; attempt++) {
                 try {
+                    ClientServiceGrpc.ClientServiceBlockingStub api = ClientServiceGrpc.newBlockingStub(channel).withDeadlineAfter(TIMEOUT_SECONDS,TimeUnit.SECONDS);
+                    SubmitResponse response = api.submit(request);
+                    if(response.getStatus() != kvguard.proto.Status.NOT_LEADER){
+                        return response;
+                    }
+                    lastRespone = response;
+                    if(response.getLeaderHint().isEmpty()){
+                        System.out.println(Instant.now() + " no leader known yet,waiting, request id=" + request.getRequestId());
+                        Thread.sleep(500L * attempt);
+                    }else{
+                        String address = addressOf(response.getLeaderHint());
+                        System.out.println(Instant.now() + " " + response.getServedBy() + " is not the leader,redirecting to " + response.getLeaderHint() + " (" + address + "), request id=" + request.getRequestId());
+                        channel = ManagedChannelBuilder.forTarget(address).usePlaintext().build();
+                        opened.add(channel);
+                    }
+                }catch (StatusRuntimeException e) {
+                    io.grpc.Status.Code code = e.getStatus().getCode();
+                    boolean retryable = code == Status.Code.DEADLINE_EXCEEDED || code == Status.Code.UNAVAILABLE;
+                    if(!retryable){
+                        throw e;
+                    }
+                    lastError = e;
+                    System.out.println(Instant.now() + " attempt " + attempt + " of " + MAX_ATTEMPTS + "failed (" + code + "), request id=" + request.getRequestId());
                     Thread.sleep(500L * attempt);
-                }catch (InterruptedException ie){
-                    Thread.currentThread().interrupt();
-                    throw e;
                 }
             }
+        }catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while retrying", ie);
+        }finally {
+            for (ManagedChannel c : opened){
+                c.shutdownNow();
+            }
+        }
+        if (lastRespone != null) {
+            return lastRespone;
         }
         throw lastError;
     }
+
     private static SubmitRequest.Builder newRequest(String clientId, Operation op) {
         // A fresh request id per command. When retrying the SAME command, reuse the same id.
         return SubmitRequest.newBuilder()
