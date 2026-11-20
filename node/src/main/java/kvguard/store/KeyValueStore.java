@@ -3,6 +3,7 @@ package kvguard.store;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import kvguard.proto.LogEntry;
 
 public class KeyValueStore {
 
@@ -60,6 +61,15 @@ public class KeyValueStore {
         long version = nextVersion++;
         data.put(key, new Entry(value, version));
         return remember(requestId, new ApplyResult(Result.OK, version, false));
+    }
+
+    public synchronized ApplyResult apply(LogEntry entry){
+        return switch (entry.getOp()){
+            case OP_PUT -> put(entry.getRequestId(), entry.getKey(), entry.getValue());
+            case OP_DELETE -> delete(entry.getRequestId(), entry.getKey());
+            case OP_CAS -> cas(entry.getRequestId(), entry.getKey(), entry.getValue(), entry.getExpectedVersion());
+            default -> throw new IllegalArgumentException("Cannot apply " + entry.getOp());
+        };
     }
 
     public synchronized Optional<Entry> get(String key) {

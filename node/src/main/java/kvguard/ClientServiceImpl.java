@@ -1,56 +1,37 @@
 package kvguard;
 
 import io.grpc.stub.StreamObserver;
+import kvguard.proto.*;
 import kvguard.store.KeyValueStore;
 import kvguard.store.KeyValueStore.ApplyResult;
 import kvguard.store.KeyValueStore.Entry;
-import kvguard.proto.ClientServiceGrpc;
-import kvguard.proto.GetRequest;
-import kvguard.proto.GetResponse;
-import kvguard.proto.Status;
-import kvguard.proto.SubmitRequest;
-import kvguard.proto.SubmitResponse;
+import kvguard.store.Replicator;
 
 import java.util.Optional;
 
-/**
- * ROLE 4: the API that clients call (Submit and Get).
- *
- * Right now every node applies requests directly to its own store, with no leader and no
- * replication. Next steps for Role 4:
- *   1. If this node is not the leader, answer NOT_LEADER with a leader_hint.
- *   2. Instead of calling store.put(...) directly, call consensus.propose(entry) and apply the
- *      change only when the commit callback arrives.
- *   3. Support READ_STRONG (leader only) and READ_STALE (any node).
- */
 public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
 
     private final String nodeId;
     private final KeyValueStore store;
+    private final Replicator replicator;
 
-    public ClientServiceImpl(String nodeId, KeyValueStore store) {
+    public ClientServiceImpl(String nodeId, KeyValueStore store,Replicator replicator) {
         this.nodeId = nodeId;
         this.store = store;
+        this.replicator = replicator;
     }
 
     @Override
     public void submit(SubmitRequest request, StreamObserver<SubmitResponse> responseObserver) {
-        ApplyResult result;
-        switch (request.getOp()) {
-            case OP_PUT -> result = store.put(request.getRequestId(), request.getKey(), request.getValue());
-            case OP_DELETE -> result = store.delete(request.getRequestId(), request.getKey());
-            case OP_CAS -> result = store.cas(request.getRequestId(), request.getKey(),
-                    request.getValue(), request.getExpectedVersion());
-            default -> {
-                responseObserver.onNext(SubmitResponse.newBuilder()
-                        .setStatus(Status.STATUS_UNKNOWN)
-                        .setMessage("Unsupported operation: " + request.getOp())
-                        .setServedBy(nodeId)
-                        .build());
-                responseObserver.onCompleted();
-                return;
-            }
+        Operation op = request.getOp();
+        if(op != Operation.OP_PUT && op != Operation.OP_DELETE && op != Operation.OP_CAS) {
+            responseObserver.onNext(SubmitResponse.newBuilder().setStatus(Status.STATUS_UNKNOWN).setMessage("Unsupported operation: " + op).setServedBy(nodeId).build());
+            responseObserver.onCompleted();
+            return;
         }
+
+        LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).build();
+        ApplyResult result = replicator.replicate(entry);
 
         Status status = toStatus(result);
         NodeLog.info(nodeId, "submit op=" + request.getOp() + " key=" + request.getKey()

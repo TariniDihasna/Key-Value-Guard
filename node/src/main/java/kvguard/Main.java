@@ -3,16 +3,11 @@ package kvguard;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import kvguard.store.KeyValueStore;
+import kvguard.store.LocalReplicator;
 
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Starts one node. Example:
- *   java -jar node.jar --id node1 --port 9001 --peers localhost:9001,localhost:9002,localhost:9003
- *
- * Every node is the same program, started with a different id and port.
- */
 public class Main {
 
     public static void main(String[] args) throws Exception {
@@ -24,7 +19,7 @@ public class Main {
         KeyValueStore store = new KeyValueStore();
 
         Server server = ServerBuilder.forPort(port)
-                .addService(new ClientServiceImpl(nodeId, store))
+                .addService(new ClientServiceImpl(nodeId, store, new LocalReplicator(store)))
                 .addService(new FailureDetectionServiceImpl(nodeId))
                 .addService(new AdminServiceImpl(nodeId, store))
                 // TODO (Role 2): add ConsensusService (RequestVote, AppendEntries)

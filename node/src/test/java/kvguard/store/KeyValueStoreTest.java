@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import kvguard.store.KeyValueStore.ApplyResult;
 import kvguard.store.KeyValueStore.Result;
 import org.junit.jupiter.api.Test;
+import kvguard.proto.LogEntry;
+import kvguard.proto.Operation;
+
+import java.security.Key;
 
 
 class KeyValueStoreTest {
@@ -38,5 +42,14 @@ class KeyValueStoreTest {
 
         assertTrue(retry.duplicate());
         assertEquals(1,store.lastApplied());
+    }
+
+    @Test
+    void applyingACasLogEntryWorks(){
+        KeyValueStore store = new KeyValueStore();
+        LogEntry entry = LogEntry.newBuilder().setRequestId("req1").setOp(Operation.OP_CAS).setKey("A12").setValue("Tarini").setExpectedVersion(0).build();
+        
+        assertEquals(Result.OK, store.apply(entry).result());
+        assertEquals("Tarini",store.get("A12").get().value());
     }
 }
