@@ -14,6 +14,12 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+/**
+ * Educational Raft-style consensus module for KeyValueGuard.
+ * Implements persistent term/vote/log, randomized elections, RequestVote,
+ * AppendEntries heartbeats and log replication, majority commit, and catch-up.
+ * This is coursework code, not a production consensus library.*/
+
 public final class ConsensusModule implements AutoCloseable {
     public enum Role { FOLLOWER, CANDIDATE, LEADER }
     public record Peer(String id, String target) { }
@@ -51,7 +57,6 @@ public final class ConsensusModule implements AutoCloseable {
     private int votesReceived = 0;
     private final int majority;
 
-    
     public ConsensusModule(String nodeId, List<Peer> peers, String dataDir, Consumer<LogEntry> applier, FaultManager faults) throws IOException {
         this.nodeId=Objects.requireNonNull(nodeId);
         this.peers=List.copyOf(peers);
@@ -145,7 +150,7 @@ public final class ConsensusModule implements AutoCloseable {
         }
     }
 
-public AppendEntriesResponse onAppendEntries(AppendEntriesRequest req) {
+    public AppendEntriesResponse onAppendEntries(AppendEntriesRequest req) {
         synchronized(lock) {
             if (req.getTerm()<currentTerm) return appendReply(false,log.size());
             if (req.getTerm()>currentTerm || role!=Role.FOLLOWER) stepDownLocked(req.getTerm(),req.getLeaderId());
@@ -197,5 +202,69 @@ public AppendEntriesResponse onAppendEntries(AppendEntriesRequest req) {
         }
         replicateAll(false);
     }
-    
+  
+    public long propose(LogEntry proposed) throws NotLeaderException, NoQuorumException {
+        final LogEntry entry;
+        synchronized(lock) {
+            if(role!=Role.LEADER) throw new NotLeaderException(leaderId);
+            entry=proposed.toBuilder().setTerm(currentTerm).setIndex(log.size()+1L).build();
+            log.add(entry); persistQuietly();
+        }
+        int replicated=1;
+        for(Peer p:peers) if(!p.id().equals(nodeId)) if(replicatePeer(p,true)) replicated++;
+        synchronized(lock) {
+            if(role!=Role.LEADER || entry.getTerm()!=currentTerm) throw new NoQuorumException("Leadership changed while proposing");
+            if(replicated<majority) throw new NoQuorumException("Majority unavailable: replicated="+replicated+" required="+majority);
+            if(entry.getIndex()>commitIndex) { commitIndex=entry.getIndex(); applyCommittedLocked(); persistQuietly(); }
+        }
+        replicateAll(false); // publish updated leaderCommit to followers
+        NodeLog.info(nodeId,"CONSENSUS committed index="+entry.getIndex()+" term="+entry.getTerm()+" op="+entry.getOp());
+        return entry.getIndex();
+    }
+
+    /** Leader must contact a majority before serving a strong read. */
+    public boolean confirmLeadership() {
+        synchronized(lock){ if(role!=Role.LEADER) return false; }
+        int count=1;
+        for(Peer p:peers) if(!p.id().equals(nodeId) && replicatePeer(p,false)) count++;
+        synchronized(lock){ return role==Role.LEADER && count>=majority; }
+    }
+
+    private void replicateAll(boolean commitAfter) {
+        List<Peer> copy=peers.stream().filter(p->!p.id().equals(nodeId)).toList();
+        for(Peer p:copy) replicatePeer(p,commitAfter);
+    }
+
+    private boolean replicatePeer(Peer p,boolean allowCommit) {
+        for(int attempt=0;attempt<12;attempt++) {
+            AppendEntriesRequest req;
+            synchronized(lock) {
+                if(role!=Role.LEADER) return false;
+                long next=nextIndex.getOrDefault(p.id(),(long)log.size()+1);
+                next=Math.max(1,Math.min(next,log.size()+1L));
+                long prev=next-1;
+                AppendEntriesRequest.Builder b=AppendEntriesRequest.newBuilder().setTerm(currentTerm).setLeaderId(nodeId)
+                        .setPrevLogIndex(prev).setPrevLogTerm(termAt(prev)).setLeaderCommit(commitIndex);
+                for(long i=next;i<=log.size();i++) b.addEntries(log.get((int)i-1));
+                req=b.build();
+            }
+            try {
+                AppendEntriesResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(500,TimeUnit.MILLISECONDS).appendEntries(req);
+                synchronized(lock) {
+                    if(r.getTerm()>currentTerm){stepDownLocked(r.getTerm(),"");return false;}
+                    if(role!=Role.LEADER) return false;
+                    if(r.getSuccess()) {
+                        long matched=req.getPrevLogIndex()+req.getEntriesCount();
+                        matchIndex.put(p.id(),Math.max(matchIndex.getOrDefault(p.id(),0L),matched));
+                        nextIndex.put(p.id(),matched+1);
+                        return true;
+                    }
+                    long old=nextIndex.getOrDefault(p.id(),(long)log.size()+1);
+                    nextIndex.put(p.id(),Math.max(1,Math.min(old-1,r.getMatchIndex()+1)));
+                }
+            } catch(StatusRuntimeException e) { return false; }
+        }
+        return false;
+    }
+
 }
