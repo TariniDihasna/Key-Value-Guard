@@ -267,4 +267,27 @@ public final class ConsensusModule implements AutoCloseable {
         return false;
     }
 
+     private void applyCommittedLocked() {
+        while(lastApplied<commitIndex) {
+            long idx=++lastApplied;
+            LogEntry e=log.get((int)idx-1);
+            try { applyCommitted.accept(e); }
+            catch(RuntimeException ex) { NodeLog.info(nodeId,"ERROR applying committed index="+idx+" : "+ex.getMessage()); }
+        }
+    }
+
+    private void stepDownLocked(long newTerm,String newLeader) {
+        if(newTerm>currentTerm){currentTerm=newTerm;votedFor="";}
+        role=Role.FOLLOWER; leaderId=newLeader==null?"":newLeader; resetElectionDeadline(); persistQuietly();
+    }
+    private long termAt(long index) { return index==0?0:log.get((int)index-1).getTerm(); }
+
+    private void loadState() throws IOException {
+        if(!Files.exists(stateFile)) return;
+        try(DataInputStream in=new DataInputStream(new BufferedInputStream(Files.newInputStream(stateFile)))) {
+            currentTerm=in.readLong(); votedFor=in.readUTF(); int count=in.readInt();
+            for(int i=0;i<count;i++){int len=in.readInt();byte[] bytes=in.readNBytes(len);if(bytes.length!=len)throw new EOFException();log.add(LogEntry.parseFrom(bytes));}
+        } catch(Exception e) { throw new IOException("Cannot load Raft state from "+stateFile,e); }
+    }
+
 }
