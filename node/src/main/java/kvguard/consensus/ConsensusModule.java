@@ -290,4 +290,22 @@ public final class ConsensusModule implements AutoCloseable {
         } catch(Exception e) { throw new IOException("Cannot load Raft state from "+stateFile,e); }
     }
 
+    private void persistQuietly() {
+        try {
+            Path tmp=stateFile.resolveSibling(stateFile.getFileName()+".tmp");
+            try(DataOutputStream out=new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp)))) {
+                out.writeLong(currentTerm);out.writeUTF(votedFor);out.writeInt(log.size());
+                for(LogEntry e:log){byte[] b=e.toByteArray();out.writeInt(b.length);out.write(b);}
+            }
+            try{Files.move(tmp,stateFile,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}catch(AtomicMoveNotSupportedException e){Files.move(tmp,stateFile,StandardCopyOption.REPLACE_EXISTING);}
+        } catch(IOException e) { NodeLog.info(nodeId,"ERROR persisting Raft state: "+e.getMessage()); }
+    }
+
+    @Override public void close() {
+        if(!closed.compareAndSet(false,true)) return;
+        scheduler.shutdownNow();rpcPool.shutdownNow();
+        for(ManagedChannel c:channels.values()) c.shutdownNow();
+        synchronized(lock){persistQuietly();}
+    }
+    
 }
