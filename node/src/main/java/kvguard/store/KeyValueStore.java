@@ -64,12 +64,21 @@ public class KeyValueStore {
     }
 
     public synchronized ApplyResult apply(LogEntry entry){
-        return switch (entry.getOp()){
+        long index = entry.getIndex();
+        if (index > 0){
+            nextVersion = index;
+        }
+        ApplyResult result = switch (entry.getOp()) {
             case OP_PUT -> put(entry.getRequestId(), entry.getKey(), entry.getValue());
             case OP_DELETE -> delete(entry.getRequestId(), entry.getKey());
             case OP_CAS -> cas(entry.getRequestId(), entry.getKey(), entry.getValue(), entry.getExpectedVersion());
+            case OP_NOOP -> new ApplyResult(Result.OK,0,false);
             default -> throw new IllegalArgumentException("Cannot apply " + entry.getOp());
         };
+        if(index > 0){
+            nextVersion = index + 1;
+        }
+        return result;
     }
 
     public synchronized Optional<Entry> get(String key) {

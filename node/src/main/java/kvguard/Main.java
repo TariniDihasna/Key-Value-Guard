@@ -2,12 +2,15 @@ package kvguard;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
-import kvguard.store.FixedLeader;
+import kvguard.consensus.ConsensusModule;
+import kvguard.consensus.ConsensusModule.Peer;
+import kvguard.failure.FaultManager;
+import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
-import kvguard.store.LocalReplicator;
-import kvguard.store.FixedLeader;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class Main {
@@ -17,15 +20,18 @@ public class Main {
         String nodeId = options.getOrDefault("id", "node1");
         int port = Integer.parseInt(options.getOrDefault("port", "9001"));
         String peers = options.getOrDefault("peers", "");
-        String leaderId = options.getOrDefault("leader", nodeId);
 
         KeyValueStore store = new KeyValueStore();
+        FaultManager faults = new FaultManager();
+        ConsensusReplicator replicator = new ConsensusReplicator(store);
+        ConsensusModule consensus = new ConsensusModule(nodeId,parsePeers(peers),"/data" + nodeId,replicator::onCommit,faults);
+        replicator.attach(consensus);
 
         Server server = ServerBuilder.forPort(port)
-                .addService(new ClientServiceImpl(nodeId, store, new LocalReplicator(store), new FixedLeader(nodeId,leaderId)))
+                .addService(new ClientServiceImpl(nodeId, store, replicator, replicator))
+                .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
                 .addService(new AdminServiceImpl(nodeId, store))
-                // TODO (Role 2): add ConsensusService (RequestVote, AppendEntries)
                 // TODO (Role 1): add TimeService (GetTime)
                 .build()
                 .start();
@@ -34,9 +40,22 @@ public class Main {
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             NodeLog.info(nodeId, "shutting down");
+            consensus.close();
             server.shutdown();
         }));
         server.awaitTermination();
+    }
+
+    private static List<Peer> parsePeers(String peers){
+        List<Peer> list = new ArrayList<>();
+        if(peers.isBlank()){
+            return list;
+        }
+        String[] targets = peers.split(",");
+        for (int i=0; i< targets.length; i++){
+            list.add(new Peer("node" + (i+1),targets[i].trim()));
+        }
+        return list;
     }
 
     /** Reads arguments of the form: --name value --name value */
