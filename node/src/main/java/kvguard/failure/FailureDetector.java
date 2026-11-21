@@ -9,18 +9,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
 import kvguard.NodeLog;
 import kvguard.proto.FailureDetectionServiceGrpc;
 import kvguard.proto.PingRequest;
 import kvguard.proto.PingResponse;
 
 
-public class FailureDetector {
+public class FailureDetector implements AutoCloseable {
     private final String nodeId;
 
-    private static final long HEARTBEAT_INTERVAL_Ms = 1000;
-    private static final long RPC_TIMEOUT_Ms = 500;
+    private static final long HEARTBEAT_INTERVAL_MS = 1000;
+    private static final long RPC_TIMEOUT_MS = 500;
     private static final int FAILURE_THRESHOLD = 3;
     
     private final Map<String, ManagedChannel> channels = 
@@ -58,7 +57,7 @@ public class FailureDetector {
         scheduler.scheduleWithFixedDelay
                    (this::checkPeers,
                     0,
-                    HEARTBEAT_INTERVAL_Ms,
+                    HEARTBEAT_INTERVAL_MS,
                     TimeUnit.MILLISECONDS);
     }
 
