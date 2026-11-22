@@ -93,4 +93,7 @@ public class FaultManager {
     public long getClockSkewMs(){
         return clockSkewMs;
     }
+    public long currentTimeMillis() {
+            return System.currentTimeMillis() + clockSkewMs;
+    }
 }

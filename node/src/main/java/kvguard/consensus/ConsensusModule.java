@@ -1,18 +1,43 @@
 package kvguard.consensus;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 import kvguard.NodeLog;
 import kvguard.failure.FaultManager;
-import kvguard.proto.*;
-
-import java.io.*;
-import java.nio.file.*;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
+import kvguard.proto.AppendEntriesRequest;
+import kvguard.proto.AppendEntriesResponse;
+import kvguard.proto.ConsensusServiceGrpc;
+import kvguard.proto.LogEntry;
+import kvguard.proto.Operation;
+import kvguard.proto.RequestVoteRequest;
+import kvguard.proto.RequestVoteResponse;
 
 /**
  * Educational Raft-style consensus module for KeyValueGuard.
@@ -126,13 +151,19 @@ public final class ConsensusModule implements AutoCloseable {
 
     private boolean requestVote(Peer p,long term,long lastIdx,long lastTerm) {
         try {
+            if(!faults.beforeSend(p.id())){
+                return false;
+            }
             RequestVoteResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(450,TimeUnit.MILLISECONDS)
                     .requestVote(RequestVoteRequest.newBuilder().setTerm(term).setCandidateId(nodeId).setLastLogIndex(lastIdx).setLastLogTerm(lastTerm).build());
             synchronized(lock) {
                 if (r.getTerm()>currentTerm) stepDownLocked(r.getTerm(),"");
                 return r.getVoteGranted() && currentTerm==term;
             }
-        } catch(Exception e) { return false; }
+        }catch(InterruptedException e) {
+            Thread.currentThread().interrupt();
+             return false;
+             }catch(Exception e) { return false; }
     }
 
     public RequestVoteResponse onRequestVote(RequestVoteRequest req) {
@@ -249,6 +280,9 @@ public final class ConsensusModule implements AutoCloseable {
                 req=b.build();
             }
             try {
+                if (!faults.beforeSend(p.id())) {
+                           return false;
+                }
                 AppendEntriesResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(500,TimeUnit.MILLISECONDS).appendEntries(req);
                 synchronized(lock) {
                     if(r.getTerm()>currentTerm){stepDownLocked(r.getTerm(),"");return false;}
@@ -262,6 +296,10 @@ public final class ConsensusModule implements AutoCloseable {
                     long old=nextIndex.getOrDefault(p.id(),(long)log.size()+1);
                     nextIndex.put(p.id(),Math.max(1,Math.min(old-1,r.getMatchIndex()+1)));
                 }
+            }catch(InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+
             } catch(StatusRuntimeException e) { return false; }
         }
         return false;

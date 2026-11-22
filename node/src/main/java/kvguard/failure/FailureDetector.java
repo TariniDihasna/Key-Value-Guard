@@ -6,6 +6,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -17,20 +18,29 @@ import kvguard.proto.PingResponse;
 
 public class FailureDetector implements AutoCloseable {
     private final String nodeId;
-
+    private final FaultManager faults;
     private static final long HEARTBEAT_INTERVAL_MS = 1000;
     private static final long RPC_TIMEOUT_MS = 500;
     private static final int FAILURE_THRESHOLD = 3;
     
     private final Map<String, ManagedChannel> channels = 
               new ConcurrentHashMap<>();
+    public void setFailureListener(Consumer<String> listener){
+        this.failureListener = listener != null ? listener : peerId -> {};
+    }
+    public void setRecoveryListener(Consumer<String> listener){
+        this.recoveryListener = listener != null ? listener : peerId -> {};
+    }
     private final Map<String, peerHealth> peerHealthMap = 
               new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = 
               Executors.newScheduledThreadPool(2);
     private final AtomicBoolean closed = new AtomicBoolean(false);
-    public FailureDetector(String nodeId, Map<String, String> peers){
+    private volatile Consumer<String> failureListener = peerId -> {};
+    private volatile Consumer<String> recoveryListener = peerId -> {};
+    public FailureDetector(String nodeId, Map<String, String> peers, FaultManager faults){
         this.nodeId = nodeId;
+        this.faults = faults;
 
         for(Map.Entry<String, String> peer : peers.entrySet()){
             String peerId = peer.getKey();
@@ -81,7 +91,29 @@ private void sendHeartbeat(String peerId, ManagedChannel channel) {
         }
 
         try {
-
+            try {
+            if (!faults.beforeSend(peerId)) {
+                peerHealth health = peerHealthMap.get(peerId);
+                if(health != null){
+                    boolean suspected = health.recordFailure(FAILURE_THRESHOLD);
+                    if(suspected){
+                        NodeLog.info(nodeId, "Failure peer= "+ peerId + " suspected");
+                try {
+                  try {
+                    failureListener.accept(peerId);
+                  } catch (RuntimeException listenerError) {
+                    NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
+                  }
+                } catch (RuntimeException listenerError) {
+                   NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
+                }                    }
+                }
+               return;
+            }
+            } catch (InterruptedException e) {
+               Thread.currentThread().interrupt();
+               return;
+           }
             PingRequest request = PingRequest.newBuilder()
                     .setSenderId(nodeId)
                     .setSentMs(System.currentTimeMillis())
@@ -104,6 +136,12 @@ private void sendHeartbeat(String peerId, ManagedChannel channel) {
                 if (recovered) {
                     NodeLog.info(nodeId,
                             "FAILURE peer=" + peerId + " RECOVERED");
+                    try{
+                        recoveryListener.accept(peerId);
+                        
+                    }catch(RuntimeException e){
+                        NodeLog.info(nodeId, "Recovery listener failed for peer=" + peerId);
+                    }
                 }
             }
 
@@ -119,6 +157,15 @@ private void sendHeartbeat(String peerId, ManagedChannel channel) {
                 if (suspected) {
                     NodeLog.info(nodeId,
                             "FAILURE peer=" + peerId + " SUSPECTED");
+                try{
+                       try {
+                         failureListener.accept(peerId);
+                       } catch (RuntimeException listenerError) {
+                          NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
+                       }
+                } catch(RuntimeException listenerError){
+                        NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
+                    }
                 }
             }
         }
