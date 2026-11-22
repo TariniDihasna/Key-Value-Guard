@@ -9,6 +9,7 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import kvguard.consensus.ConsensusModule;
 import kvguard.consensus.ConsensusModule.Peer;
+import kvguard.failure.FailureDetector;
 import kvguard.failure.FaultManager;
 import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
@@ -23,8 +24,22 @@ public class Main {
 
         KeyValueStore store = new KeyValueStore();
         FaultManager faults = new FaultManager();
+        List<Peer> clusterPeers = parsePeers(peers);
+
+        Map<String, String> peerAddresses = new HashMap<>();
+        for(Peer peer : clusterPeers){
+            peerAddresses.put(peer.id(), peer.target());
+        }
+
+        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses);
+        failureDetector.start();
         ConsensusReplicator replicator = new ConsensusReplicator(store);
-        ConsensusModule consensus = new ConsensusModule(nodeId,parsePeers(peers),"/data" + nodeId,replicator::onCommit,faults);
+        ConsensusModule consensus = new ConsensusModule(
+            nodeId,
+            clusterPeers,
+             "/data" + nodeId,
+            replicator::onCommit, 
+            faults);
         replicator.attach(consensus);
 
         Server server = ServerBuilder.forPort(port)
@@ -39,6 +54,7 @@ public class Main {
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             NodeLog.info(nodeId, "shutting down");
+            failureDetector.close();
             consensus.close();
             server.shutdown();
         }));
