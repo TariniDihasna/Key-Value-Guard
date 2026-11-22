@@ -1,5 +1,10 @@
 package kvguard;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import kvguard.consensus.ConsensusModule;
@@ -7,11 +12,6 @@ import kvguard.consensus.ConsensusModule.Peer;
 import kvguard.failure.FaultManager;
 import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 public class Main {
 
@@ -31,8 +31,7 @@ public class Main {
                 .addService(new ClientServiceImpl(nodeId, store, replicator, replicator))
                 .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
-                .addService(new AdminServiceImpl(nodeId, store))
-                // TODO (Role 1): add TimeService (GetTime)
+                .addService(new AdminServiceImpl(nodeId, store, faults))
                 .build()
                 .start();
 
