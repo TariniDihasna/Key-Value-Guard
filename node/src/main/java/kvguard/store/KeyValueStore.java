@@ -3,16 +3,8 @@ package kvguard.store;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import kvguard.proto.LogEntry;
 
-/**
- * ROLE 4 (Replication and consistency) starting point.
- *
- * A very small in-memory key-value store with versions, compare-and-set (CAS) and
- * duplicate-request protection. Right now every request is applied directly on this one node.
- * Later, the store should change ONLY when ConsensusModule reports that a log entry is
- * committed (see docs/DESIGN.md, section 5). When that happens, "nextVersion" is replaced by
- * the real log index of the entry.
- */
 public class KeyValueStore {
 
     public record Entry(String value, long version) { }
@@ -69,6 +61,24 @@ public class KeyValueStore {
         long version = nextVersion++;
         data.put(key, new Entry(value, version));
         return remember(requestId, new ApplyResult(Result.OK, version, false));
+    }
+
+    public synchronized ApplyResult apply(LogEntry entry){
+        long index = entry.getIndex();
+        if (index > 0){
+            nextVersion = index;
+        }
+        ApplyResult result = switch (entry.getOp()) {
+            case OP_PUT -> put(entry.getRequestId(), entry.getKey(), entry.getValue());
+            case OP_DELETE -> delete(entry.getRequestId(), entry.getKey());
+            case OP_CAS -> cas(entry.getRequestId(), entry.getKey(), entry.getValue(), entry.getExpectedVersion());
+            case OP_NOOP -> new ApplyResult(Result.OK,0,false);
+            default -> throw new IllegalArgumentException("Cannot apply " + entry.getOp());
+        };
+        if(index > 0){
+            nextVersion = index + 1;
+        }
+        return result;
     }
 
     public synchronized Optional<Entry> get(String key) {

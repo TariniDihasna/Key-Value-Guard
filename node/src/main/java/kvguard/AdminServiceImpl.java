@@ -1,12 +1,13 @@
 package kvguard;
 
 import io.grpc.stub.StreamObserver;
-import kvguard.store.KeyValueStore;
+import kvguard.failure.FaultManager;
 import kvguard.proto.AdminServiceGrpc;
 import kvguard.proto.FaultAck;
 import kvguard.proto.FaultConfig;
 import kvguard.proto.NodeStatus;
 import kvguard.proto.StatusRequest;
+import kvguard.store.KeyValueStore;
 
 /**
  * ROLE 3 starting point: status and fault injection.
@@ -19,10 +20,12 @@ public class AdminServiceImpl extends AdminServiceGrpc.AdminServiceImplBase {
 
     private final String nodeId;
     private final KeyValueStore store;
+    private final FaultManager faults;
 
-    public AdminServiceImpl(String nodeId, KeyValueStore store) {
+    public AdminServiceImpl(String nodeId, KeyValueStore store, FaultManager faults) {
         this.nodeId = nodeId;
         this.store = store;
+        this.faults = faults;
     }
 
     @Override
@@ -37,10 +40,19 @@ public class AdminServiceImpl extends AdminServiceGrpc.AdminServiceImplBase {
 
     @Override
     public void setFault(FaultConfig request, StreamObserver<FaultAck> responseObserver) {
-        responseObserver.onNext(FaultAck.newBuilder()
+        try {
+            String message = faults.configure(request);
+            responseObserver.onNext(FaultAck.newBuilder()
+                    .setOk(false)
+                    .setMessage(message)
+                    .build());
+            
+        } catch (IllegalArgumentException e) {
+            responseObserver.onNext(FaultAck.newBuilder()
                 .setOk(false)
-                .setMessage("Fault injection is not implemented yet (Role 3)")
+                .setMessage(e.getMessage())
                 .build());
+        }
         responseObserver.onCompleted();
     }
 }
