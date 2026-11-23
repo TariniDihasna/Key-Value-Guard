@@ -9,6 +9,7 @@ import kvguard.store.Replicator;
 import kvguard.store.LeaderInfo;
 import kvguard.proto.ReadMode;
 import kvguard.store.ReplicationException;
+import kvguard.clock.ClockService;
 
 import java.util.Optional;
 
@@ -18,12 +19,14 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
     private final KeyValueStore store;
     private final Replicator replicator;
     private final LeaderInfo leader;
+    private final ClockService clockService;
 
-    public ClientServiceImpl(String nodeId, KeyValueStore store,Replicator replicator, LeaderInfo leader) {
+    public ClientServiceImpl(String nodeId, KeyValueStore store,Replicator replicator, LeaderInfo leader,  ClockService clockService ) {
         this.nodeId = nodeId;
         this.store = store;
         this.replicator = replicator;
         this.leader = leader;
+        this.clockService = clockService;
     }
 
     @Override
@@ -40,8 +43,11 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
             responseObserver.onCompleted();
             return;
         }
+        // Generate timestamps for this new log entry.
+        long lamportTimestamp = clockService.lamportTick();
+        long wallTime = clockService.now();
 
-        LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).build();
+        LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).setLamport(lamportTimestamp).setWallTimeMs(wallTime).build();
         ApplyResult result;
         try {
             result = replicator.replicate(entry);
