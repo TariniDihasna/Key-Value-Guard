@@ -35,6 +35,8 @@ public class FaultManager {
                         "Drop probability must be between 0.0 and 1.0"
                     );
               } 
+              blockedPeers.clear();
+              blockedPeers.addAll(config.getBlockedPeersList());
     
               delayMs = config.getDelayMs();
               dropProbability = probability;

@@ -43,7 +43,7 @@ public class AdminServiceImpl extends AdminServiceGrpc.AdminServiceImplBase {
         try {
             String message = faults.configure(request);
             responseObserver.onNext(FaultAck.newBuilder()
-                    .setOk(false)
+                    .setOk(true)
                     .setMessage(message)
                     .build());
             
