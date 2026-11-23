@@ -175,6 +175,21 @@ private void sendHeartbeat(String peerId, ManagedChannel channel) {
         return Map.copyOf(peerHealthMap);
     }
 
+    public String getPeerStatus(String peerId){
+        peerHealth health = peerHealthMap.get(peerId);
+        if(health == null){
+            return "UNKNOWN";
+        }
+        return health.getState().name();
+    }
+    
+    public void printPeerStatuses() {
+    for (String peerId : peerHealthMap.keySet()) {
+        NodeLog.info(nodeId,
+                "Peer " + peerId + " status: " + getPeerStatus(peerId));
+    }
+    }
+
     public void close() {
 
         if (!closed.compareAndSet(false, true)) {
