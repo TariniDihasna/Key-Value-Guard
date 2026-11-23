@@ -54,7 +54,7 @@ public class Main {
         );
 
         Server server = ServerBuilder.forPort(port)
-                .addService(new ClientServiceImpl(nodeId, store, replicator, replicator))
+                .addService(new ClientServiceImpl(nodeId, store, replicator, replicator, clockService))
                 .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
                 .addService(new AdminServiceImpl(nodeId, store, faults, clockService ))
