@@ -16,11 +16,11 @@ public class peerHealth {
             this.peerId = peerId;
     }
 
-    public synchronized boolean recordSuccess(){
+    public synchronized boolean recordSuccess(long timestamp){
         boolean recovered = (state == State.SUSPECTED);
         state = State.ALIVE;
         consecutiveFailures = 0;
-        lastSuccessFullHeartbeatsMs = System.currentTimeMillis();
+        lastSuccessFullHeartbeatsMs = timestamp;
 
         return recovered;
     }
