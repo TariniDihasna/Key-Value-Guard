@@ -35,7 +35,7 @@ public class Main {
             peerAddresses.put(peer.id(), peer.target());
         }
 
-        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults);
+        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService );
         failureDetector.start();
         ConsensusReplicator replicator = new ConsensusReplicator(store);
         ConsensusModule consensus = new ConsensusModule(
