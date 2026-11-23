@@ -63,6 +63,10 @@ public class FailureDetector implements AutoCloseable {
                      + peerHealthMap.size() + " peers.");
     }
 
+    public long getCurrentTimeMillis(){
+        return faults.currentTimeMillis();
+    }
+
     public void start(){
         scheduler.scheduleWithFixedDelay
                    (this::checkPeers,
