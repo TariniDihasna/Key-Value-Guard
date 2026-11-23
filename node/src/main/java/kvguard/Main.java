@@ -43,7 +43,7 @@ public class Main {
             clusterPeers,
              "data/" + nodeId,
             replicator::onCommit, 
-            faults);
+            faults, clockService );
         replicator.attach(consensus);
 
         failureDetector.setFailureListener(peerId -> 
