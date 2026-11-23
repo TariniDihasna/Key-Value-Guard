@@ -173,8 +173,13 @@ public class Main {
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 try {
                     GetResponse response = ClientServiceGrpc.newBlockingStub(channel).withDeadlineAfter(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(request);
-                    if (response.getStatus() != kvguard.proto.Status.NOT_LEADER || response.getLeaderHint().isEmpty()) {
+                    if (response.getStatus() != kvguard.proto.Status.NOT_LEADER) {
                         return response;
+                    }
+                    if(response.getLeaderHint().isEmpty()){
+                        System.out.println(Instant.now() + " no leader known yet,waiting");
+                        Thread.sleep(500L * attempt);
+                        continue;
                     }
                     currentAddress = addressOf(response.getLeaderHint());
                     System.out.println(Instant.now() + " " + response.getServedBy() + " is not the leader, redirecting to " + currentAddress);
