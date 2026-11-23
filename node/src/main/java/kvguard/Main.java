@@ -46,11 +46,18 @@ public class Main {
             faults);
         replicator.attach(consensus);
 
+        failureDetector.setFailureListener(peerId -> 
+                NodeLog.info(nodeId, "Detected failure of " + peerId)
+        );
+        failureDetector.setRecoveryListener(peerId -> 
+                NodeLog.info(nodeId, "Detected recovery of " + peerId)
+        );
+
         Server server = ServerBuilder.forPort(port)
-                .addService(new ClientServiceImpl(nodeId, store, replicator, replicator))
+                .addService(new ClientServiceImpl(nodeId, store, replicator, replicator, clockService))
                 .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
-                .addService(new AdminServiceImpl(nodeId, store, faults))
+                .addService(new AdminServiceImpl(nodeId, store, faults, clockService ))
                 .addService(new TimeServiceImpl(clockService))
                 .build()
                 .start();

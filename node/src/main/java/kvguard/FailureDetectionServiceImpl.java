@@ -4,6 +4,7 @@ import io.grpc.stub.StreamObserver;
 import kvguard.proto.FailureDetectionServiceGrpc;
 import kvguard.proto.PingRequest;
 import kvguard.proto.PingResponse;
+import kvguard.clock.ClockService;
 
 /**
  * ROLE 3 starting point: answers "are you alive?" pings from other nodes.
@@ -15,19 +16,32 @@ import kvguard.proto.PingResponse;
 public class FailureDetectionServiceImpl extends FailureDetectionServiceGrpc.FailureDetectionServiceImplBase {
 
     private final String nodeId;
+    private final ClockService clockService;
 
-    public FailureDetectionServiceImpl(String nodeId) {
+    public FailureDetectionServiceImpl(String nodeId, ClockService clockService ) {
         this.nodeId = nodeId;
+        this.clockService = clockService;
     }
 
     @Override
-    public void ping(PingRequest request, StreamObserver<PingResponse> responseObserver) {
-        responseObserver.onNext(PingResponse.newBuilder()
-                .setNodeId(nodeId)
-                .setRole("FOLLOWER")   // TODO (Role 2): real role from the consensus module
-                .setTerm(0)            // TODO (Role 2): real term
-                .setLamport(request.getLamport()) // TODO (Role 1): real Lamport clock
-                .build());
-        responseObserver.onCompleted();
+    public void ping(
+        PingRequest request,
+        StreamObserver<PingResponse> responseObserver) {
+
+    // Update the local clock when a heartbeat arrives.
+    clockService.lamportOnReceive(request.getLamport());
+
+    // Generate a new timestamp before sending the response.
+    long responseLamport = clockService.lamportTick();
+
+    PingResponse response = PingResponse.newBuilder()
+            .setNodeId(nodeId)
+            .setRole("FOLLOWER")
+            .setTerm(0)
+            .setLamport(responseLamport)
+            .build();
+
+    responseObserver.onNext(response);
+    responseObserver.onCompleted();
     }
 }

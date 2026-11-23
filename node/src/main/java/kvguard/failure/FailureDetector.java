@@ -13,7 +13,6 @@ import io.grpc.ManagedChannelBuilder;
 import kvguard.NodeLog;
 import kvguard.proto.FailureDetectionServiceGrpc;
 import kvguard.proto.PingRequest;
-import kvguard.proto.PingResponse;
 
 
 public class FailureDetector implements AutoCloseable {
@@ -38,6 +37,7 @@ public class FailureDetector implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private volatile Consumer<String> failureListener = peerId -> {};
     private volatile Consumer<String> recoveryListener = peerId -> {};
+    
     public FailureDetector(String nodeId, Map<String, String> peers, FaultManager faults){
         this.nodeId = nodeId;
         this.faults = faults;
@@ -63,6 +63,10 @@ public class FailureDetector implements AutoCloseable {
                      + peerHealthMap.size() + " peers.");
     }
 
+    public long getCurrentTimeMillis(){
+        return faults.currentTimeMillis();
+    }
+
     public void start(){
         scheduler.scheduleWithFixedDelay
                    (this::checkPeers,
@@ -77,99 +81,74 @@ public class FailureDetector implements AutoCloseable {
         }
 
     for (Map.Entry<String, ManagedChannel> peer : channels.entrySet()) {
-
-            scheduler.execute(() ->
-                    sendHeartbeat(peer.getKey(), peer.getValue())
-            );
+                    sendHeartbeat(peer.getKey(), peer.getValue());
+            
         }    
     }
 
-private void sendHeartbeat(String peerId, ManagedChannel channel) {
+    private void sendHeartbeat(String peerId, ManagedChannel channel) {
 
-        if (closed.get()) {
+    if (closed.get()) {
+        return;
+    }
+
+    try {
+        if (!faults.beforeSend(peerId)) {
+            recordPeerFailure(peerId);
             return;
         }
 
-        try {
-            try {
-            if (!faults.beforeSend(peerId)) {
-                peerHealth health = peerHealthMap.get(peerId);
-                if(health != null){
-                    boolean suspected = health.recordFailure(FAILURE_THRESHOLD);
-                    if(suspected){
-                        NodeLog.info(nodeId, "Failure peer= "+ peerId + " suspected");
+        PingRequest request = PingRequest.newBuilder()
+                .setSenderId(nodeId)
+                .setSentMs(faults.currentTimeMillis())
+                .build();
+
+        FailureDetectionServiceGrpc.newBlockingStub(channel)
+                .withDeadlineAfter(RPC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .ping(request);
+
+        peerHealth health = peerHealthMap.get(peerId);
+
+        if (health != null) {
+            boolean recovered = health.recordSuccess(faults.currentTimeMillis());
+
+            if (recovered) {
+                NodeLog.info(nodeId, "FAILURE peer=" + peerId + " RECOVERED");
+
                 try {
-                  try {
-                    failureListener.accept(peerId);
-                  } catch (RuntimeException listenerError) {
-                    NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
-                  }
-                } catch (RuntimeException listenerError) {
-                   NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
-                }                    }
-                }
-               return;
-            }
-            } catch (InterruptedException e) {
-               Thread.currentThread().interrupt();
-               return;
-           }
-            PingRequest request = PingRequest.newBuilder()
-                    .setSenderId(nodeId)
-                    .setSentMs(System.currentTimeMillis())
-                    .build();
-
-            PingResponse response =
-                    FailureDetectionServiceGrpc.newBlockingStub(channel)
-                            .withDeadlineAfter(
-                                    RPC_TIMEOUT_MS,
-                                    TimeUnit.MILLISECONDS
-                            )
-                            .ping(request);
-
-            peerHealth health = peerHealthMap.get(peerId);
-
-            if (health != null) {
-
-                boolean recovered = health.recordSuccess();
-
-                if (recovered) {
-                    NodeLog.info(nodeId,
-                            "FAILURE peer=" + peerId + " RECOVERED");
-                    try{
-                        recoveryListener.accept(peerId);
-                        
-                    }catch(RuntimeException e){
-                        NodeLog.info(nodeId, "Recovery listener failed for peer=" + peerId);
-                    }
-                }
-            }
-
-        } catch (RuntimeException e) {
-
-            peerHealth health = peerHealthMap.get(peerId);
-
-            if (health != null) {
-
-                boolean suspected =
-                        health.recordFailure(FAILURE_THRESHOLD);
-
-                if (suspected) {
-                    NodeLog.info(nodeId,
-                            "FAILURE peer=" + peerId + " SUSPECTED");
-                try{
-                       try {
-                         failureListener.accept(peerId);
-                       } catch (RuntimeException listenerError) {
-                          NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
-                       }
-                } catch(RuntimeException listenerError){
-                        NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
-                    }
+                    recoveryListener.accept(peerId);
+                } catch (RuntimeException error) {
+                    NodeLog.info(nodeId, "Recovery listener failed for peer=" + peerId);
                 }
             }
         }
+
+    } catch (InterruptedException error) {
+        Thread.currentThread().interrupt();
+
+    } catch (RuntimeException error) {
+        recordPeerFailure(peerId);
     }
+  }
+
+    private void recordPeerFailure(String peerId) {
+
+    peerHealth health = peerHealthMap.get(peerId);
+
+    if (health != null) {
+        boolean suspected = health.recordFailure(FAILURE_THRESHOLD);
+
+        if (suspected) {
+            NodeLog.info(nodeId, "FAILURE peer=" + peerId + " SUSPECTED");
+
+            try {
+                failureListener.accept(peerId);
+            } catch (RuntimeException error) {
+                NodeLog.info(nodeId, "Failure listener failed for peer=" + peerId);
+            }
+        }
+    }
+   }
 
     public Map<String, peerHealth> getPeerHealthMap() {
         return Map.copyOf(peerHealthMap);

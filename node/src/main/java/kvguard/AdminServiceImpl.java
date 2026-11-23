@@ -8,6 +8,7 @@ import kvguard.proto.FaultConfig;
 import kvguard.proto.NodeStatus;
 import kvguard.proto.StatusRequest;
 import kvguard.store.KeyValueStore;
+import kvguard.clock.ClockService;
 
 /**
  * ROLE 3 starting point: status and fault injection.
@@ -21,11 +22,13 @@ public class AdminServiceImpl extends AdminServiceGrpc.AdminServiceImplBase {
     private final String nodeId;
     private final KeyValueStore store;
     private final FaultManager faults;
+    private final ClockService clockService;
 
-    public AdminServiceImpl(String nodeId, KeyValueStore store, FaultManager faults) {
+    public AdminServiceImpl(String nodeId, KeyValueStore store, FaultManager faults, ClockService clockService) {
         this.nodeId = nodeId;
         this.store = store;
         this.faults = faults;
+        this.clockService = clockService;
     }
 
     @Override
@@ -42,8 +45,9 @@ public class AdminServiceImpl extends AdminServiceGrpc.AdminServiceImplBase {
     public void setFault(FaultConfig request, StreamObserver<FaultAck> responseObserver) {
         try {
             String message = faults.configure(request);
+            clockService.setSkewMillis(faults.getClockSkewMs());
             responseObserver.onNext(FaultAck.newBuilder()
-                    .setOk(false)
+                    .setOk(true)
                     .setMessage(message)
                     .build());
             
