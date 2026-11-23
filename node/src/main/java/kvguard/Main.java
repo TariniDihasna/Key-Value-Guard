@@ -57,7 +57,7 @@ public class Main {
                 .addService(new ClientServiceImpl(nodeId, store, replicator, replicator))
                 .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
-                .addService(new AdminServiceImpl(nodeId, store, faults))
+                .addService(new AdminServiceImpl(nodeId, store, faults, clockService ))
                 .addService(new TimeServiceImpl(clockService))
                 .build()
                 .start();
