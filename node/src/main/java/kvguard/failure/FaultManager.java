@@ -2,6 +2,8 @@ package kvguard.failure;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import kvguard.proto.FaultConfig;
 
@@ -45,14 +47,53 @@ public class FaultManager {
         return blockedPeers.contains(peerId);
     }
 
+    public boolean shouldDrop(String peerId){
+        if(isBlocked(peerId)){
+            return true;
+        }
+        double probability = dropProbability;
+        return ThreadLocalRandom.current().nextDouble()
+                        < probability;
+    }
 
+    public void applyDelay() throws InterruptedException{
+        int delay = delayMs;
+        if(delay > 0){
+            TimeUnit.MILLISECONDS.sleep(delay);;
+        }
+    }
 
-
+    public boolean beforeSend(String peerId) throws InterruptedException{
+        if(shouldDrop(peerId)){
+            return false;
+        }
+        applyDelay();
+        return !isBlocked(peerId);
+    }
 
     public synchronized void clearAll(){
         blockedPeers.clear();
         delayMs = 0;
         dropProbability = 0.0;
         clockSkewMs = 0;
+    }
+
+    public Set<String> getBlockedPeers(){
+        return Set.copyOf(blockedPeers);
+    }
+
+    public int getDelayMs(){
+        return delayMs;
+    }
+
+    public double getDropProbability(){
+        return dropProbability;
+    }
+
+    public long getClockSkewMs(){
+        return clockSkewMs;
+    }
+    public long currentTimeMillis() {
+            return System.currentTimeMillis() + clockSkewMs;
     }
 }

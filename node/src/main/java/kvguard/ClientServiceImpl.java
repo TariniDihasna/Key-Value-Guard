@@ -8,6 +8,7 @@ import kvguard.store.KeyValueStore.Entry;
 import kvguard.store.Replicator;
 import kvguard.store.LeaderInfo;
 import kvguard.proto.ReadMode;
+import kvguard.store.ReplicationException;
 
 import java.util.Optional;
 
@@ -41,11 +42,20 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
         }
 
         LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).build();
-        ApplyResult result = replicator.replicate(entry);
+        ApplyResult result;
+        try {
+            result = replicator.replicate(entry);
+        }catch (ReplicationException e){
+            Status failed = e.reason() == ReplicationException.Reason.NOT_LEADER ? Status.NOT_LEADER : Status.NO_QUORUM;
+            NodeLog.info(nodeId,"submit request = " + request.getRequestId() + "->" + failed);
+            responseObserver.onNext(SubmitResponse.newBuilder().setStatus(failed).setLeaderHint(e.leaderHint()).setMessage(e.getMessage()).setServedBy(nodeId).build());
+            responseObserver.onCompleted();
+            return;
+        }
 
         Status status = toStatus(result);
-        NodeLog.info(nodeId, "submit op=" + request.getOp() + " key=" + request.getKey()
-                + " request=" + request.getRequestId() + " -> " + status);
+        NodeLog.info(nodeId, "submit op = " + request.getOp() + " key = " + request.getKey()
+                + " request = " + request.getRequestId() + " -> " + status);
 
         responseObserver.onNext(SubmitResponse.newBuilder()
                 .setStatus(status)
@@ -64,6 +74,11 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
             return;
         }
 
+        if(request.getMode() == ReadMode.READ_STRONG && !leader.confirmLeadership()){
+            responseObserver.onNext(GetResponse.newBuilder().setStatus(Status.NO_QUORUM).setServedBy(nodeId).build());
+            responseObserver.onCompleted();
+            return;
+        }
         Optional<Entry> entry = store.get(request.getKey());
         GetResponse.Builder reply = GetResponse.newBuilder()
                 .setAppliedIndex(store.lastApplied())
