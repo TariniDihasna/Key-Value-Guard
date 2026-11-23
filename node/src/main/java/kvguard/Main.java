@@ -13,6 +13,9 @@ import kvguard.failure.FailureDetector;
 import kvguard.failure.FaultManager;
 import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
+import kvguard.clock.ClockService;
+import kvguard.clock.ClockServiceImpl;
+import kvguard.clock.TimeServiceImpl;
 
 public class Main {
 
@@ -23,6 +26,7 @@ public class Main {
         String peers = options.getOrDefault("peers", "");
 
         KeyValueStore store = new KeyValueStore();
+        ClockService clockService = new ClockServiceImpl(nodeId, peers);
         FaultManager faults = new FaultManager();
         List<Peer> clusterPeers = parsePeers(peers);
 
@@ -47,6 +51,7 @@ public class Main {
                 .addService(consensus.service())
                 .addService(new FailureDetectionServiceImpl(nodeId))
                 .addService(new AdminServiceImpl(nodeId, store, faults))
+                .addService(new TimeServiceImpl(clockService))
                 .build()
                 .start();
 
