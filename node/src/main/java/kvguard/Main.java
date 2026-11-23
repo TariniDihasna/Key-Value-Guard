@@ -37,7 +37,7 @@ public class Main {
         ConsensusModule consensus = new ConsensusModule(
             nodeId,
             clusterPeers,
-             "/data" + nodeId,
+             "data/" + nodeId,
             replicator::onCommit, 
             faults);
         replicator.attach(consensus);
