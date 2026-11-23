@@ -83,15 +83,15 @@ public class Main {
                 requireArgs(command, 2, "get KEY [stale]");
                 boolean stale = command.size() > 2 && command.get(2).equalsIgnoreCase("stale");
                 GetResponse r = getWithRetry(channel,target, GetRequest.newBuilder().setKey(command.get(1)).setMode(stale ? ReadMode.READ_STALE : ReadMode.READ_STRONG).build());
-                log(clientId, target, "GET " + command.get(1), " status = " + r.getStatus() + " found = " + r.getFound() + " value = " + r.getValue() + " version = " + r.getVersion() + " applied = " + r.getAppliedIndex() + " servedBy= " + r.getServedBy());
+                log(clientId, target, "GET " + command.get(1), " status = " + r.getStatus() + " found = " + r.getFound() + " value = " + r.getValue() + " version = " + r.getVersion() + " applied = " + r.getAppliedIndex() + " servedBy = " + r.getServedBy());
             }
             case "ping" -> {
                 PingResponse r = FailureDetectionServiceGrpc.newBlockingStub(channel)
                         .withDeadlineAfter(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                         .ping(PingRequest.newBuilder().setSenderId(clientId)
                                 .setSentMs(System.currentTimeMillis()).build());
-                log(clientId, target, "PING", "node = " + r.getNodeId() + " role= " + r.getRole()
-                        + " term=" + r.getTerm());
+                log(clientId, target, "PING ", " node = " + r.getNodeId() + " role = " + r.getRole()
+                        + " term = " + r.getTerm());
             }
             default -> printUsage();
         }
@@ -152,7 +152,7 @@ public class Main {
             }
         }catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while retrying", ie);
+            throw new IllegalStateException("Interrupted while retrying ", ie);
         }finally {
             for (ManagedChannel c : opened){
                 c.shutdownNow();
@@ -200,7 +200,7 @@ public class Main {
             }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while retrying", ie);
+            throw new IllegalStateException("Interrupted while retrying ", ie);
         } finally {
             for (ManagedChannel c : opened) {
                 c.shutdownNow();
@@ -237,7 +237,7 @@ public class Main {
         System.out.println("Usage: java -jar client.jar [--target host:port] [--client id] COMMAND");
         System.out.println("  put KEY VALUE");
         System.out.println("  get KEY [stale]");
-        System.out.println("  cas KEY EXPECTED_VERSION VALUE   (0 = key must not exist)");
+        System.out.println("  cas KEY EXPECTED_VERSION VALUE (0 = key must not exist)");
         System.out.println("  delete KEY");
         System.out.println("  ping");
     }

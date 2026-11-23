@@ -47,15 +47,15 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
             result = replicator.replicate(entry);
         }catch (ReplicationException e){
             Status failed = e.reason() == ReplicationException.Reason.NOT_LEADER ? Status.NOT_LEADER : Status.NO_QUORUM;
-            NodeLog.info(nodeId,"submit request=" + request.getRequestId() + "->" + failed);
+            NodeLog.info(nodeId,"submit request = " + request.getRequestId() + "->" + failed);
             responseObserver.onNext(SubmitResponse.newBuilder().setStatus(failed).setLeaderHint(e.leaderHint()).setMessage(e.getMessage()).setServedBy(nodeId).build());
             responseObserver.onCompleted();
             return;
         }
 
         Status status = toStatus(result);
-        NodeLog.info(nodeId, "submit op=" + request.getOp() + " key=" + request.getKey()
-                + " request=" + request.getRequestId() + " -> " + status);
+        NodeLog.info(nodeId, "submit op = " + request.getOp() + " key = " + request.getKey()
+                + " request = " + request.getRequestId() + " -> " + status);
 
         responseObserver.onNext(SubmitResponse.newBuilder()
                 .setStatus(status)
