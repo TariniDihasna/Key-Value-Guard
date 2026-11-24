@@ -7,15 +7,15 @@ import java.util.Map;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import kvguard.clock.ClockService;
+import kvguard.clock.ClockServiceImpl;
+import kvguard.clock.TimeServiceImpl;
 import kvguard.consensus.ConsensusModule;
 import kvguard.consensus.ConsensusModule.Peer;
 import kvguard.failure.FailureDetector;
 import kvguard.failure.FaultManager;
 import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
-import kvguard.clock.ClockService;
-import kvguard.clock.ClockServiceImpl;
-import kvguard.clock.TimeServiceImpl;
 
 public class Main {
 
@@ -35,7 +35,7 @@ public class Main {
             peerAddresses.put(peer.id(), peer.target());
         }
 
-        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults);
+        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService);
         failureDetector.start();
         ConsensusReplicator replicator = new ConsensusReplicator(store);
         ConsensusModule consensus = new ConsensusModule(

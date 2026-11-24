@@ -13,6 +13,7 @@ import java.util.function.Consumer;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import kvguard.NodeLog;
+import kvguard.clock.ClockService;
 import kvguard.proto.FailureDetectionServiceGrpc;
 import kvguard.proto.PingRequest;
 import kvguard.proto.PingResponse;
@@ -21,6 +22,7 @@ import kvguard.proto.PingResponse;
 public class FailureDetector implements AutoCloseable {
     private final String nodeId;
     private final FaultManager faults;
+    private final ClockService clockService;
     private static final long HEARTBEAT_INTERVAL_MS = 1000;
     private static final long RPC_TIMEOUT_MS = 500;
     private static final int FAILURE_THRESHOLD = 3;
@@ -41,9 +43,10 @@ public class FailureDetector implements AutoCloseable {
     private volatile Consumer<String> failureListener = peerId -> {};
     private volatile Consumer<String> recoveryListener = peerId -> {};
     
-    public FailureDetector(String nodeId, Map<String, String> peers, FaultManager faults){
+    public FailureDetector(String nodeId, Map<String, String> peers, FaultManager faults, ClockService clockService){
         this.nodeId = nodeId;
         this.faults = faults;
+        this.clockService = clockService;
 
         for(Map.Entry<String, String> peer : peers.entrySet()){
             String peerId = peer.getKey();
@@ -110,16 +113,20 @@ public class FailureDetector implements AutoCloseable {
             recordPeerFailure(peerId);
             return;
         }
+        long lamportTimestamp = clockService.lamportTick();
 
         PingRequest request = PingRequest.newBuilder()
                 .setSenderId(nodeId)
                 .setSentMs(faults.currentTimeMillis())
+                .setLamport(lamportTimestamp)
                 .build();
 
         PingResponse response =
         FailureDetectionServiceGrpc.newBlockingStub(channel)
                 .withDeadlineAfter(RPC_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 .ping(request);
+
+        clockService.lamportOnReceive(response.getLamport());
 
         peerHealth health = peerHealthMap.get(peerId);
 
