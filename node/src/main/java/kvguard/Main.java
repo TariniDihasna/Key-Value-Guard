@@ -11,6 +11,9 @@ import java.util.concurrent.TimeUnit;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import kvguard.clock.ClockService;
+import kvguard.clock.ClockServiceImpl;
+import kvguard.clock.TimeServiceImpl;
 import kvguard.consensus.ConsensusModule;
 import kvguard.consensus.ConsensusModule.Peer;
 import kvguard.failure.FailureDetector;
@@ -41,6 +44,7 @@ public class Main {
             peerAddresses.put(peer.id(), peer.target());
         }
 
+        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService);
         FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService );
         failureDetector.start();
         List<LogEntry> committedLog = Collections.synchronizedList(new ArrayList<>());
