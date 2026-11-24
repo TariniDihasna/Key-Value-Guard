@@ -43,11 +43,8 @@ public class ClientServiceImpl extends ClientServiceGrpc.ClientServiceImplBase {
             responseObserver.onCompleted();
             return;
         }
-        // Generate timestamps for this new log entry.
-        long lamportTimestamp = clockService.lamportTick();
-        long wallTime = clockService.now();
 
-        LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).setLamport(lamportTimestamp).setWallTimeMs(wallTime).build();
+        LogEntry entry = LogEntry.newBuilder().setRequestId(request.getRequestId()).setClientId(request.getClientId()).setOp(op).setKey(request.getKey()).setValue(request.getValue()).setExpectedVersion(request.getExpectedVersion()).build();
         ApplyResult result;
         try {
             result = replicator.replicate(entry);
