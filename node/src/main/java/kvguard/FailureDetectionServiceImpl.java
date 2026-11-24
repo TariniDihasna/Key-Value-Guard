@@ -1,47 +1,47 @@
 package kvguard;
 
 import io.grpc.stub.StreamObserver;
+import kvguard.clock.ClockService;
+import kvguard.consensus.ConsensusModule;
+import kvguard.failure.FaultManager;
 import kvguard.proto.FailureDetectionServiceGrpc;
 import kvguard.proto.PingRequest;
 import kvguard.proto.PingResponse;
-import kvguard.clock.ClockService;
 
-/**
- * ROLE 3 starting point: answers "are you alive?" pings from other nodes.
- *
- * Next steps for Role 3: build the sender side (ping every peer every 100 ms, mark a peer
- * suspected after a timeout, call listeners) in the failure package. Role 2 will fill in the
- * real role and term here once consensus exists.
- */
+/** Answers "are you alive?" pings from other nodes and from the client. */
 public class FailureDetectionServiceImpl extends FailureDetectionServiceGrpc.FailureDetectionServiceImplBase {
 
     private final String nodeId;
     private final ClockService clockService;
+    private final ConsensusModule consensus;
+    private final FaultManager faults;
 
-    public FailureDetectionServiceImpl(String nodeId, ClockService clockService ) {
+    public FailureDetectionServiceImpl(String nodeId, ClockService clockService,
+                                       ConsensusModule consensus, FaultManager faults) {
         this.nodeId = nodeId;
         this.clockService = clockService;
+        this.consensus = consensus;
+        this.faults = faults;
     }
 
     @Override
-    public void ping(
-        PingRequest request,
-        StreamObserver<PingResponse> responseObserver) {
+    public void ping(PingRequest request, StreamObserver<PingResponse> responseObserver) {
+        // Partition: ignore traffic from a blocked node.
+        if (faults.isBlocked(request.getSenderId())) {
+            responseObserver.onError(io.grpc.Status.UNAVAILABLE
+                    .withDescription("blocked by fault injection").asRuntimeException());
+            return;
+        }
 
-    // Update the local clock when a heartbeat arrives.
-    clockService.lamportOnReceive(request.getLamport());
+        clockService.lamportOnReceive(request.getLamport());
+        long responseLamport = clockService.lamportTick();
 
-    // Generate a new timestamp before sending the response.
-    long responseLamport = clockService.lamportTick();
-
-    PingResponse response = PingResponse.newBuilder()
-            .setNodeId(nodeId)
-            .setRole("FOLLOWER")
-            .setTerm(0)
-            .setLamport(responseLamport)
-            .build();
-
-    responseObserver.onNext(response);
-    responseObserver.onCompleted();
+        responseObserver.onNext(PingResponse.newBuilder()
+                .setNodeId(nodeId)
+                .setRole(consensus.roleName())
+                .setTerm(consensus.term())
+                .setLamport(responseLamport)
+                .build());
+        responseObserver.onCompleted();
     }
 }

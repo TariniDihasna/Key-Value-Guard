@@ -35,7 +35,7 @@ public class Main {
             peerAddresses.put(peer.id(), peer.target());
         }
 
-        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService );
+        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults);
         failureDetector.start();
         ConsensusReplicator replicator = new ConsensusReplicator(store);
         ConsensusModule consensus = new ConsensusModule(
@@ -43,7 +43,7 @@ public class Main {
             clusterPeers,
              "data/" + nodeId,
             replicator::onCommit, 
-            faults, clockService );
+            faults);
         replicator.attach(consensus);
 
         failureDetector.setFailureListener(peerId -> 
@@ -56,8 +56,8 @@ public class Main {
         Server server = ServerBuilder.forPort(port)
                 .addService(new ClientServiceImpl(nodeId, store, replicator, replicator, clockService))
                 .addService(consensus.service())
-                .addService(new FailureDetectionServiceImpl(nodeId, clockService ))
-                .addService(new AdminServiceImpl(nodeId, store, faults, clockService ))
+                .addService(new FailureDetectionServiceImpl(nodeId, clockService, consensus, faults))
+                .addService(new AdminServiceImpl(nodeId, store, faults, clockService, consensus, failureDetector))
                 .addService(new TimeServiceImpl(clockService))
                 .build()
                 .start();
