@@ -1,10 +1,10 @@
 package kvguard;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Collections;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -13,18 +13,15 @@ import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import kvguard.clock.ClockService;
 import kvguard.clock.ClockServiceImpl;
+import kvguard.clock.LogOrderingChecker;
 import kvguard.clock.TimeServiceImpl;
 import kvguard.consensus.ConsensusModule;
 import kvguard.consensus.ConsensusModule.Peer;
 import kvguard.failure.FailureDetector;
 import kvguard.failure.FaultManager;
+import kvguard.proto.LogEntry;
 import kvguard.store.ConsensusReplicator;
 import kvguard.store.KeyValueStore;
-import kvguard.clock.ClockService;
-import kvguard.clock.ClockServiceImpl;
-import kvguard.clock.TimeServiceImpl;
-import kvguard.clock.LogOrderingChecker;
-import kvguard.proto.LogEntry;
 
 public class Main {
 
@@ -45,7 +42,6 @@ public class Main {
         }
 
         FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService);
-        FailureDetector failureDetector = new FailureDetector(nodeId, peerAddresses, faults, clockService );
         failureDetector.start();
         List<LogEntry> committedLog = Collections.synchronizedList(new ArrayList<>());
         LogOrderingChecker orderingChecker = new LogOrderingChecker();
