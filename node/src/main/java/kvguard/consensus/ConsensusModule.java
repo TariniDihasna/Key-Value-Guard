@@ -99,7 +99,7 @@ public final class ConsensusModule implements AutoCloseable {
         NodeLog.info(nodeId,"CONSENSUS started peers="+peers.size()+" majority="+majority+" term="+currentTerm+" log="+log.size());
     }
 
-    public ConsensusServiceImpl service() { return new ConsensusServiceImpl(this); }
+    public ConsensusServiceImpl service() { return new ConsensusServiceImpl(this,faults); }
     public String roleName() { synchronized(lock){ return role.name(); } }
     public long term() { synchronized(lock){ return currentTerm; } }
     public String leaderId() { synchronized(lock){ return leaderId; } }
