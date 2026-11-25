@@ -38,6 +38,7 @@ import kvguard.proto.LogEntry;
 import kvguard.proto.Operation;
 import kvguard.proto.RequestVoteRequest;
 import kvguard.proto.RequestVoteResponse;
+import kvguard.clock.ClockService;
 
 /**
  * Educational Raft-style consensus module for KeyValueGuard.
@@ -62,6 +63,7 @@ public final class ConsensusModule implements AutoCloseable {
     private final Map<String, ManagedChannel> channels = new ConcurrentHashMap<>();
     private final Consumer<LogEntry> applyCommitted;
     private final FaultManager faults;
+    private final ClockService clockService;
     private final Path stateFile;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     private final ExecutorService rpcPool = Executors.newCachedThreadPool();
@@ -82,11 +84,12 @@ public final class ConsensusModule implements AutoCloseable {
     private int votesReceived = 0;
     private final int majority;
 
-    public ConsensusModule(String nodeId, List<Peer> peers, String dataDir, Consumer<LogEntry> applier, FaultManager faults) throws IOException {
+    public ConsensusModule(String nodeId, List<Peer> peers, String dataDir, Consumer<LogEntry> applier, FaultManager faults, ClockService clockService ) throws IOException {
         this.nodeId=Objects.requireNonNull(nodeId);
         this.peers=List.copyOf(peers);
         this.applyCommitted=Objects.requireNonNull(applier);
         this.faults=Objects.requireNonNull(faults);
+        this.clockService = Objects.requireNonNull(clockService);
         this.majority=(peers.size()/2)+1;
         if (peers.stream().noneMatch(p -> p.id().equals(nodeId))) throw new IllegalArgumentException("Peers list must include this node: "+nodeId);
         Path dir=Paths.get(dataDir); Files.createDirectories(dir); this.stateFile=dir.resolve("raft-state.bin");
@@ -96,7 +99,7 @@ public final class ConsensusModule implements AutoCloseable {
         NodeLog.info(nodeId,"CONSENSUS started peers="+peers.size()+" majority="+majority+" term="+currentTerm+" log="+log.size());
     }
 
-    public ConsensusServiceImpl service() { return new ConsensusServiceImpl(this); }
+    public ConsensusServiceImpl service() { return new ConsensusServiceImpl(this,faults); }
     public String roleName() { synchronized(lock){ return role.name(); } }
     public long term() { synchronized(lock){ return currentTerm; } }
     public String leaderId() { synchronized(lock){ return leaderId; } }
@@ -149,24 +152,49 @@ public final class ConsensusModule implements AutoCloseable {
         });
     }
 
-    private boolean requestVote(Peer p,long term,long lastIdx,long lastTerm) {
-        try {
-            if(!faults.beforeSend(p.id())){
-                return false;
+    private boolean requestVote(Peer p, long term, long lastIdx, long lastTerm) {
+    try {
+        if (!faults.beforeSend(p.id())) {
+            return false;
+        }
+
+        // Generate Lamport timestamp before sending the request.
+        long lamportTimestamp = clockService.lamportTick();
+
+        RequestVoteRequest request = RequestVoteRequest.newBuilder()
+                .setTerm(term)
+                .setCandidateId(nodeId)
+                .setLastLogIndex(lastIdx)
+                .setLastLogTerm(lastTerm)
+                .setLamport(lamportTimestamp)
+                .build();
+
+        RequestVoteResponse r =
+                ConsensusServiceGrpc.newBlockingStub(channels.get(p.id()))
+                        .withDeadlineAfter(450, TimeUnit.MILLISECONDS)
+                        .requestVote(request);
+
+        // Update local clock after receiving the response.
+        clockService.lamportOnReceive(r.getLamport());
+
+        synchronized (lock) {
+            if (r.getTerm() > currentTerm) {
+                stepDownLocked(r.getTerm(), "");
             }
-            RequestVoteResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(450,TimeUnit.MILLISECONDS)
-                    .requestVote(RequestVoteRequest.newBuilder().setTerm(term).setCandidateId(nodeId).setLastLogIndex(lastIdx).setLastLogTerm(lastTerm).build());
-            synchronized(lock) {
-                if (r.getTerm()>currentTerm) stepDownLocked(r.getTerm(),"");
-                return r.getVoteGranted() && currentTerm==term;
-            }
-        }catch(InterruptedException e) {
-            Thread.currentThread().interrupt();
-             return false;
-             }catch(Exception e) { return false; }
+
+            return r.getVoteGranted() && currentTerm == term;
+        }
+
+        } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return false;
+        } catch (Exception e) {
+        return false;
+        }
     }
 
     public RequestVoteResponse onRequestVote(RequestVoteRequest req) {
+        clockService.lamportOnReceive(req.getLamport());
         synchronized(lock) {
             if (req.getTerm()>currentTerm) stepDownLocked(req.getTerm(),"");
             boolean grant=false;
@@ -177,11 +205,13 @@ public final class ConsensusModule implements AutoCloseable {
                     votedFor=req.getCandidateId(); role=Role.FOLLOWER; leaderId=""; resetElectionDeadline(); persistQuietly(); grant=true;
                 }
             }
-            return RequestVoteResponse.newBuilder().setTerm(currentTerm).setVoteGranted(grant).build();
+            return RequestVoteResponse.newBuilder().setTerm(currentTerm).setVoteGranted(grant).setLamport(clockService.lamportTick()).build();
         }
     }
 
     public AppendEntriesResponse onAppendEntries(AppendEntriesRequest req) {
+        // Update local clock when receiving AppendEntries.
+        clockService.lamportOnReceive(req.getLamport());
         synchronized(lock) {
             if (req.getTerm()<currentTerm) return appendReply(false,log.size());
             if (req.getTerm()>currentTerm || role!=Role.FOLLOWER) stepDownLocked(req.getTerm(),req.getLeaderId());
@@ -208,7 +238,7 @@ public final class ConsensusModule implements AutoCloseable {
     }
 
     private AppendEntriesResponse appendReply(boolean success,long match) {
-        return AppendEntriesResponse.newBuilder().setTerm(currentTerm).setSuccess(success).setMatchIndex(match).build();
+        return AppendEntriesResponse.newBuilder().setTerm(currentTerm).setSuccess(success).setMatchIndex(match).setLamport(clockService.lamportTick()).build();
     }
 
     private void becomeLeaderLocked() {
@@ -217,7 +247,7 @@ public final class ConsensusModule implements AutoCloseable {
         for(Peer p:peers) if(!p.id().equals(nodeId)){nextIndex.put(p.id(),next);matchIndex.put(p.id(),0L);}
         NodeLog.info(nodeId,"CONSENSUS became LEADER term="+currentTerm+" majority="+majority);
         // A current-term no-op establishes a commit point for entries from previous terms.
-        LogEntry noop=LogEntry.newBuilder().setTerm(currentTerm).setIndex(log.size()+1L).setOp(Operation.OP_NOOP).setRequestId("raft-noop-"+nodeId+"-"+currentTerm).build();
+        LogEntry noop=LogEntry.newBuilder().setTerm(currentTerm).setIndex(log.size()+1L).setOp(Operation.OP_NOOP).setRequestId("raft-noop-"+nodeId+"-"+currentTerm).setLamport(clockService.lamportTick()).setWallTimeMs(clockService.now()).build();
         log.add(noop); persistQuietly();
         scheduler.execute(this::replicateLeaderNoop);
     }
@@ -238,7 +268,7 @@ public final class ConsensusModule implements AutoCloseable {
         final LogEntry entry;
         synchronized(lock) {
             if(role!=Role.LEADER) throw new NotLeaderException(leaderId);
-            entry=proposed.toBuilder().setTerm(currentTerm).setIndex(log.size()+1L).build();
+            entry=proposed.toBuilder().setTerm(currentTerm).setIndex(log.size()+1L).setLamport(clockService.lamportTick()).setWallTimeMs(clockService.now()).build();
             log.add(entry); persistQuietly();
         }
         int replicated=1;
@@ -275,7 +305,7 @@ public final class ConsensusModule implements AutoCloseable {
                 next=Math.max(1,Math.min(next,log.size()+1L));
                 long prev=next-1;
                 AppendEntriesRequest.Builder b=AppendEntriesRequest.newBuilder().setTerm(currentTerm).setLeaderId(nodeId)
-                        .setPrevLogIndex(prev).setPrevLogTerm(termAt(prev)).setLeaderCommit(commitIndex);
+                        .setPrevLogIndex(prev).setPrevLogTerm(termAt(prev)).setLeaderCommit(commitIndex).setLamport(clockService.lamportTick());
                 for(long i=next;i<=log.size();i++) b.addEntries(log.get((int)i-1));
                 req=b.build();
             }
@@ -284,6 +314,8 @@ public final class ConsensusModule implements AutoCloseable {
                            return false;
                 }
                 AppendEntriesResponse r=ConsensusServiceGrpc.newBlockingStub(channels.get(p.id())).withDeadlineAfter(500,TimeUnit.MILLISECONDS).appendEntries(req);
+                // Update local clock after receiving the response.
+                clockService.lamportOnReceive(r.getLamport());
                 synchronized(lock) {
                     if(r.getTerm()>currentTerm){stepDownLocked(r.getTerm(),"");return false;}
                     if(role!=Role.LEADER) return false;

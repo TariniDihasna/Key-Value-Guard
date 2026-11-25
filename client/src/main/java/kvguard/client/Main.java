@@ -14,6 +14,11 @@ import kvguard.proto.PingResponse;
 import kvguard.proto.ReadMode;
 import kvguard.proto.SubmitRequest;
 import kvguard.proto.SubmitResponse;
+import kvguard.proto.AdminServiceGrpc;
+import kvguard.proto.FaultAck;
+import kvguard.proto.FaultConfig;
+import kvguard.proto.NodeStatus;
+import kvguard.proto.StatusRequest;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -92,6 +97,49 @@ public class Main {
                                 .setSentMs(System.currentTimeMillis()).build());
                 log(clientId, target, "PING ", " node = " + r.getNodeId() + " role = " + r.getRole()
                         + " term = " + r.getTerm());
+            }
+            case "fault" -> {
+                requireArgs(command, 2, "fault block NODES | delay MS | drop PROB | skew MS | clear");
+                FaultConfig.Builder cfg = FaultConfig.newBuilder();
+                switch (command.get(1).toLowerCase()) {
+                    case "block" -> {
+                        requireArgs(command, 3, "fault block node3,node4");
+                        for (String id : command.get(2).split(",")) {
+                            cfg.addBlockedPeers(id.trim());
+                        }
+                    }
+                    case "delay" -> {
+                        requireArgs(command, 3, "fault delay MS");
+                        cfg.setDelayMs(Integer.parseInt(command.get(2)));
+                    }
+                    case "drop" -> {
+                        requireArgs(command, 3, "fault drop 0.3");
+                        cfg.setDropProbability(Double.parseDouble(command.get(2)));
+                    }
+                    case "skew" -> {
+                        requireArgs(command, 3, "fault skew MS");
+                        cfg.setClockSkewMs(Long.parseLong(command.get(2)));
+                    }
+                    case "clear" -> cfg.setClearAll(true);
+                    default -> {
+                        printUsage();
+                        return;
+                    }
+                }
+                FaultAck ack = AdminServiceGrpc.newBlockingStub(channel)
+                        .withDeadlineAfter(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .setFault(cfg.build());
+                log(clientId, target, "FAULT " + String.join(" ", command.subList(1, command.size())),
+                        " ok = " + ack.getOk() + " " + ack.getMessage());
+            }
+            case "status" -> {
+                NodeStatus s = AdminServiceGrpc.newBlockingStub(channel)
+                        .withDeadlineAfter(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .getStatus(StatusRequest.newBuilder().build());
+                log(clientId, target, "STATUS", " node = " + s.getNodeId() + " role = " + s.getRole()
+                        + " term = " + s.getTerm() + " leader = " + s.getLeaderId()
+                        + " commit = " + s.getCommitIndex() + " applied = " + s.getLastApplied()
+                        + " lamport = " + s.getLamport() + " skew = " + s.getClockSkewMs());
             }
             default -> printUsage();
         }
@@ -219,7 +267,8 @@ public class Main {
     private static String describe(SubmitResponse r) {
         return "status = " + r.getStatus() + " version = " + r.getCurrentVersion()
                 + " servedBy = " + r.getServedBy()
-                + (r.getLeaderHint().isEmpty() ? "" : " leaderHint = " + r.getLeaderHint());
+                + (r.getLeaderHint().isEmpty() ? "" : " leaderHint = " + r.getLeaderHint())
+                + (r.getStatus() == kvguard.proto.Status.DUPLICATE ? " (already applied earlier)" : "");
     }
 
     private static void requireArgs(List<String> command, int count, String usage) {
@@ -240,5 +289,7 @@ public class Main {
         System.out.println("  cas KEY EXPECTED_VERSION VALUE (0 = key must not exist)");
         System.out.println("  delete KEY");
         System.out.println("  ping");
+        System.out.println("  fault block node3,node4 | delay MS | drop PROB | skew MS | clear   (sent to --target)");
+        System.out.println("  status");
     }
 }
